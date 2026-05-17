@@ -1206,7 +1206,7 @@ APPENDING_DISPLAY_ID() {
     # Add a name to build ID, doesnt delete the line, it adds at the end
 	local EXTRACTED_FIRM_DIR="$1"
 
-    APPEND_DISPLAY_ID "$1" "H3CKED UI $H3CKED-UI_VERSION $BUILD_STATUS Stable"
+    APPEND_DISPLAY_ID "$1" "H3CKED UI $H3CKED_UI_VERSION $BUILD_STATUS Stable"
 }
 
 GEN_FS_CONFIG() {
