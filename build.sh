@@ -59,9 +59,14 @@ else
 fi
 
 FW_URL=$(whiptail \
-    --inputbox "Firmware URL (leave blank for default device firmware)" \
+    --inputbox "Firmware URL (REQUIRED)" \
     10 70 \
     3>&1 1>&2 2>&3)
+
+if [ -z "$FW_URL" ]; then
+    echo "[ERROR] Firmware URL is required. Aborting build."
+    exit 1
+fi
 
 H3CKED_UI_VERSION="1.2.0"
 OUTPUT_FILESYSTEM="erofs"
@@ -102,24 +107,11 @@ fi
 
 echo "[JAVA] Using heap: $_JAVA_OPTIONS"
 
-if [ -d "FIRMWARE/.cache_valid" ] && [ -z "$FW_URL" ]; then
-  echo "[INFO] Using cached firmware"
-else
-  source scripts/H3CKED-UI.sh
-
-  if [ -n "$FW_URL" ]; then
-    echo "[INFO] Downloading firmware from URL"
-    DOWNLOAD_FIRMWARE "$STOCK_DEVICE" "$FIRM_DIR" "$FW_URL"
-  else
-    echo "[INFO] Using device default firmware config"
-    source "$DEVICES_DIR/$STOCK_DEVICE/config"
-    DOWNLOAD_FIRMWARE "$TARGET_DEVICE" "$FIRM_DIR" ""
-  fi
-
-  touch FIRMWARE/.cache_valid
-fi
-
 source scripts/H3CKED-UI.sh
+
+DOWNLOAD_FIRMWARE "$STOCK_DEVICE" "$FIRM_DIR" "$FW_URL"
+
+export TARGET_DEVICE
 
 EXTRACT_FIRMWARE "FIRMWARE"
 PREPARE_PARTITIONS "FIRMWARE"
@@ -171,8 +163,8 @@ UPDATE_ZIP_SCRIPT "FIRMWARE"
 FLASHABLE_ZIP_CREATION
 
 if [ -f "./upload.sh" ]; then
-  chmod +x ./upload.sh
-  bash ./upload.sh "$(pwd)/template/${ZIP_NAME}"
+    chmod +x ./upload.sh
+    bash ./upload.sh "$(pwd)/template/${ZIP_NAME}"
 fi
 
 echo "Build finished. ROM located at: ${OUT_DIR}/${ZIP_NAME}"
