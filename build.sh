@@ -1,33 +1,78 @@
 #!/bin/bash
 set -e
 
-########################################
-# USER INPUTS (replace like workflow_dispatch)
-########################################
+sudo apt update
+sudo apt install -y \
+  p7zip-full lz4 android-sdk-libsparse-utils \
+  python3 python3-pip zipalign unzip default-jre openjdk-17-jdk brotli \
+  e2fsprogs zstd aria2 whiptail
 
-STOCK_DEVICE="${1:-SM-A226B}"
-USE_UI_8_TETHERING_APEX="${2:-true}"
-FW_URL="${3:-}"
+DEVICES_DIR="$PWD/H3CKED-UI/Devices"
+
+if ! command -v whiptail >/dev/null 2>&1; then
+    echo "[ERROR] whiptail not installed. Run: sudo apt install whiptail"
+    exit 1
+fi
+
+DEVICE_LIST=()
+
+for dir in "$DEVICES_DIR"/SM-*; do
+    [ -d "$dir" ] || continue
+    dev=$(basename "$dir")
+    DEVICE_LIST+=("$dev" "")
+done
+
+if [ ${#DEVICE_LIST[@]} -eq 0 ]; then
+    echo "[ERROR] No devices found in $DEVICES_DIR"
+    exit 1
+fi
+
+STOCK_DEVICE=$(whiptail \
+    --title "H3CKED-UI Builder" \
+    --menu "Select Stock Device" \
+    20 60 10 \
+    "${DEVICE_LIST[@]}" \
+    3>&1 1>&2 2>&3)
+
+if [ -z "$STOCK_DEVICE" ]; then
+    echo "[INFO] Cancelled"
+    exit 1
+fi
+
+KERNEL_BPF_VERSION=$(whiptail \
+    --title "Kernel BPF Version" \
+    --menu "Select kernel BPF version" \
+    15 60 2 \
+    "5.4" "" \
+    "5.10" "" \
+    3>&1 1>&2 2>&3)
+
+if [ -z "$KERNEL_BPF_VERSION" ]; then
+    echo "[INFO] Cancelled"
+    exit 1
+fi
+
+if [ "$KERNEL_BPF_VERSION" = "5.10" ]; then
+    USE_UI_8_TETHERING_APEX="false"
+else
+    USE_UI_8_TETHERING_APEX="true"
+fi
+
+FW_URL=$(whiptail \
+    --inputbox "Firmware URL (leave blank for default device firmware)" \
+    10 70 \
+    3>&1 1>&2 2>&3)
 
 H3CKED_UI_VERSION="1.2.0"
 OUTPUT_FILESYSTEM="erofs"
 
-########################################
-# PATHS (same as GITHUB_ENV)
-########################################
-
 OUT_DIR="$PWD/OUT"
 WORK_DIR="$PWD/WORK"
 FIRM_DIR="$PWD/FIRMWARE"
-DEVICES_DIR="$PWD/H3CKED-UI/Devices"
 APKTOOL="$PWD/bin/apktool/apktool.jar"
 VNDKS_COLLECTION="$PWD/H3CKED-UI/vndks"
 
 BUILD_PARTITIONS="product,vendor,odm,system_ext,system"
-
-########################################
-# CHECK REPO (replaces secrets step)
-########################################
 
 export H3CKED_UI_BUILD="${H3CKED_UI_BUILD:-}"
 export OFFICIAL_HASH="${OFFICIAL_HASH:-}"
@@ -35,10 +80,6 @@ export OFFICIAL_HASH="${OFFICIAL_HASH:-}"
 source scripts/H3CKED-UI.sh
 GITHUB_ENV=/dev/null
 IS_OFFICIAL
-
-########################################
-# SETUP
-########################################
 
 git lfs install
 git lfs pull
@@ -48,7 +89,6 @@ chmod +x bin/erofs-utils/mkfs.erofs
 
 bash scripts/setup_directories.sh FIRMWARE WORK OUT
 
-# Auto JVM memory tuning for ROM build
 TOTAL_RAM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
 TOTAL_RAM_GB=$((TOTAL_RAM_KB / 1024 / 1024))
 
@@ -62,40 +102,22 @@ fi
 
 echo "[JAVA] Using heap: $_JAVA_OPTIONS"
 
-########################################
-# INSTALL DEPENDENCIES (CI equivalent)
-########################################
-
-sudo apt update
-sudo apt install -y \
-  p7zip-full lz4 android-sdk-libsparse-utils \
-  python3 python3-pip zipalign unzip default-jre openjdk-17-jdk brotli \
-  e2fsprogs zstd aria2
-
-python3 -m pip install --break-system-packages liblp tgcrypto pyrogram gdown
-
-# FW DL
-
 if [ -d "FIRMWARE/.cache_valid" ] && [ -z "$FW_URL" ]; then
   echo "[INFO] Using cached firmware"
 else
+  source scripts/H3CKED-UI.sh
+
   if [ -n "$FW_URL" ]; then
     echo "[INFO] Downloading firmware from URL"
-    source scripts/H3CKED-UI.sh
     DOWNLOAD_FIRMWARE "$STOCK_DEVICE" "$FIRM_DIR" "$FW_URL"
   else
-    echo "[INFO] No FW_URL provided, using default device config"
+    echo "[INFO] Using device default firmware config"
     source "$DEVICES_DIR/$STOCK_DEVICE/config"
-    source scripts/H3CKED-UI.sh
     DOWNLOAD_FIRMWARE "$TARGET_DEVICE" "$FIRM_DIR" ""
   fi
 
   touch FIRMWARE/.cache_valid
 fi
-
-
-# ROM BUILD
-
 
 source scripts/H3CKED-UI.sh
 
@@ -115,8 +137,6 @@ APPLY_FEATURES "FIRMWARE"
 APPLY_MODS "FIRMWARE"
 
 APPENDING_DISPLAY_ID "FIRMWARE"
-
-# PATCHES
 
 INSTALL_FRAMEWORK "FIRMWARE/system/system/framework/framework-res.apk"
 
@@ -143,18 +163,12 @@ RECOMPILE "$APKTOOL" "$WORK_DIR/services" \
 
 cp -fv "$WORK_DIR"/*.jar "FIRMWARE/system/system/framework/"
 
-# BUILD IMG
-
 BUILD_IMG "FIRMWARE" "$OUTPUT_FILESYSTEM" "$OUT_DIR"
 IMG_TO_BROTLI "$OUT_DIR" "TMP"
-
-# CREATE ZIP
 
 source scripts/zip_creation.sh
 UPDATE_ZIP_SCRIPT "FIRMWARE"
 FLASHABLE_ZIP_CREATION
-
-# UPLOAD ZIP
 
 if [ -f "./upload.sh" ]; then
   chmod +x ./upload.sh
