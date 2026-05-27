@@ -44,48 +44,53 @@ REMOVE_LINE() {
 }
 
 DOWNLOAD_FIRMWARE() {
-    if [ "$#" -ne 2 ]; then
-        echo "Usage: ${FUNCNAME[0]} <MODEL> <DOWNLOAD_DIRECTORY>"
+    if [ "$#" -lt 2 ]; then
+        echo "Usage: ${FUNCNAME[0]} <MODEL> <DOWNLOAD_DIRECTORY> [ROM_URL]"
         return 1
     fi
 
     MODEL="$1"
     DOWN_DIR="$2"
+    ROM_URL="$3"
 
     mkdir -p "$DOWN_DIR" || return 1
-    
-    echo "Preparing ROM images for $STOCK_DEVICE"
+
+    echo "Preparing ROM images for $MODEL"
 
     FW_FILE="${DOWN_DIR}/BASE_FW.zip"
-    FW_URL=""
 
-    # Determine FW URL and cached filename based on stock device
-    if [[ "$STOCK_DEVICE" == "SM-A325F" || "$STOCK_DEVICE" == "SM-A325M" || "$STOCK_DEVICE" == "SM-M325F" ]]; then
-        FW_URL="https://h3cked.qzz.io/d/H3CKED_HDD/H3CKED-UI/Base_FW/A346B.zip?sign=dEcmb1aVAD5SMPl4TUfd8d9so1sDhGHwU3NsboKbqjg=:0"
-        CACHE_FW="${DOWN_DIR}/A34.zip"
-
-    elif [[ "$STOCK_DEVICE" == "SM-A225F" || "$STOCK_DEVICE" == "SM-A225M" || "$STOCK_DEVICE" == "SM-E225F" || "$STOCK_DEVICE" == "SM-M225F" || "$STOCK_DEVICE" == "SM-A226B" ]]; then
-        FW_URL="https://h3cked.qzz.io/d/H3CKED_HDD/H3CKED-UI/Base_FW/A245F.zip?sign=PgTm63F54o7XSlxoF3WYDdoDmClRopm1DlzJHJ1TpeU=:0"
-        CACHE_FW="${DOWN_DIR}/A24.zip"
+    # If ROM URL is provided → use it for ALL devices
+    if [ -n "$ROM_URL" ]; then
+        echo "Using provided ROM URL for all devices"
+        wget -O "$FW_FILE" "$ROM_URL" || return 1
 
     else
-        echo "Unknown device: $STOCK_DEVICE"
-        return 1
+        # Otherwise use cached per-device firmware
+        if [[ "$MODEL" == "SM-A325F" || "$MODEL" == "SM-A325M" || "$MODEL" == "SM-M325F" ]]; then
+            CACHE_FW="${DOWN_DIR}/A34.zip"
+
+        elif [[ "$MODEL" == "SM-A225F" || "$MODEL" == "SM-A225M" || "$MODEL" == "SM-E225F" || "$MODEL" == "SM-M225F" || "$MODEL" == "SM-A226B" ]]; then
+            CACHE_FW="${DOWN_DIR}/A24.zip"
+
+        else
+            echo "Unknown device: $MODEL"
+            return 1
+        fi
+
+        if [ -f "$CACHE_FW" ]; then
+            echo "Using cached firmware: $CACHE_FW"
+            mv "$CACHE_FW" "$FW_FILE"
+        else
+            echo "Cached firmware not found: $CACHE_FW"
+            return 1
+        fi
     fi
 
-    # Check for cached firmware and rename it
-    if [ -f "$CACHE_FW" ]; then
-        echo "Using cached firmware: $CACHE_FW"
-        mv "$CACHE_FW" "$FW_FILE"
-        # Remove any other zip files in the folder
-        find "$DOWN_DIR" -maxdepth 1 -type f -name '*.zip' ! -name 'BASE_FW.zip' -exec rm -f {} +
-    else
-        echo "Firmware not found, downloading..."
-        wget -O "$FW_FILE" "$FW_URL" || return 1
-    fi
+    echo "Downloading vendor for ${MODEL}"
 
-    echo "Downloading vendor for ${STOCK_DEVICE}"
-    wget -q "https://github.com/H3CKED-UI/Vendors/releases/download/${STOCK_DEVICE}_latest/vendor.img" -O "${DOWN_DIR}/vendor.img"
+    wget -q \
+        "https://github.com/H3CKED-UI/Vendors/releases/download/${MODEL}_latest/vendor.img" \
+        -O "${DOWN_DIR}/vendor.img"
 }
 
 EXTRACT_FIRMWARE() {
@@ -111,7 +116,6 @@ EXTRACT_FIRMWARE() {
 
     rm -f "$ZIP"
 }
-
 
 PREPARE_PARTITIONS() {
     if [ "$#" -ne 1 ]; then

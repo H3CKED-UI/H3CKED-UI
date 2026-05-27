@@ -4,13 +4,18 @@ on:
   workflow_dispatch:
     inputs:
       STOCK_DEVICE:
-        description: "Put the Model of your phone, remember it starts with SM-"
+        description: "Phone Model"
         required: true
-        default: "SM-A325F"
+        default: "SM-A226B"
       USE_UI_8_TETHERING_APEX:
-        description: "Set True if your kernel BPF version is lower than 5.10"
+        description: "Set to true if kernel BPF version is lower than 5.10"
+        type: boolean
         required: true
-        default: "False"
+        default: true
+      FW_URL:
+        description: "Direct download link for firmware (optional - overrides cache)"
+        required: false
+        default: ""
 
 jobs:
   build:
@@ -84,7 +89,7 @@ jobs:
       run: |
         source scripts/H3CKED-UI.sh
         source "$DEVICES_DIR/$STOCK_DEVICE/config"
-        DOWNLOAD_FIRMWARE "$TARGET_DEVICE" "$FIRM_DIR"
+        DOWNLOAD_FIRMWARE "$TARGET_DEVICE" "$FIRM_DIR" "$FW_URL"
 
     - name: Extract firmware
       shell: bash
