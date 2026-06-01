@@ -14,6 +14,8 @@ if ! command -v whiptail >/dev/null 2>&1; then
     exit 1
 fi
 
+git lfs update --force
+
 DEVICE_LIST=()
 
 for dir in "$DEVICES_DIR"/SM-*; do
