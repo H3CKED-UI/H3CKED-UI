@@ -44,53 +44,124 @@ REMOVE_LINE() {
 }
 
 DOWNLOAD_FIRMWARE() {
-    if [ "$#" -lt 2 ]; then
-        echo "Usage: ${FUNCNAME[0]} <MODEL> <DOWNLOAD_DIRECTORY> [ROM_URL]"
+    echo " "
+
+    if [ "$#" -lt 3 ]; then
+        echo -e "Usage: ${FUNCNAME[0]} <MODEL> <CSC> <DOWNLOAD_DIRECTORY> [VERSION]"
         return 1
     fi
 
-    MODEL="$1"
-    DOWN_DIR="$2"
-    ROM_URL="$3"
+    local MODEL="$1"
+    local CSC="$2"
+    local DOWN_DIR="$3"
+    local VERSION="${4:-}"
 
+    rm -rf "$DOWN_DIR"
     mkdir -p "$DOWN_DIR" || return 1
 
-    echo "Preparing ROM images for $MODEL"
+    # Allow CSC argument to be a direct download URL
+    if [ "${#CSC}" -ne 3 ]; then
+        echo "- CSC is not 3 characters"
+        echo "- Treating CSC as download URL"
 
-    FW_FILE="${DOWN_DIR}/BASE_FW.zip"
+        if [[ "$CSC" =~ gofile\.io/d/([^/?]+) ]]; then
+            echo "GoFile link detected"
+            echo "Directory: ${BASH_REMATCH[1]}"
 
-    # If ROM URL is provided → use it for ALL devices
-    if [ -n "$ROM_URL" ]; then
-        echo "Using provided ROM URL for all devices"
-        wget -O "$FW_FILE" "$ROM_URL" || return 1
+            python3 "${QT_DIR}/GoFileDownloader/downloader.py" "$CSC" || return 1
 
-    else
-        # Otherwise use cached per-device firmware
-        if [[ "$MODEL" == "SM-A325F" || "$MODEL" == "SM-A325M" || "$MODEL" == "SM-M325F" ]]; then
-            CACHE_FW="${DOWN_DIR}/A34.zip"
+            mv "${QT_DIR}/Downloads/${BASH_REMATCH[1]}"/* "$DOWN_DIR"/ || return 1
 
-        elif [[ "$MODEL" == "SM-A225F" || "$MODEL" == "SM-A225M" || "$MODEL" == "SM-E225F" || "$MODEL" == "SM-M225F" || "$MODEL" == "SM-A226B" ]]; then
-            CACHE_FW="${DOWN_DIR}/A24.zip"
-
+            return 0
         else
-            echo "Unknown device: $MODEL"
-            return 1
+            WGET_DOWNLOAD "$CSC" "$DOWN_DIR"
+            return $?
         fi
+    fi
 
-        if [ -f "$CACHE_FW" ]; then
-            echo "Using cached firmware: $CACHE_FW"
-            mv "$CACHE_FW" "$FW_FILE"
-        else
-            echo "Cached firmware not found: $CACHE_FW"
+    echo -e "======================================"
+    echo -e "  Samsung FW Downloader"
+    echo -e "======================================"
+    echo -e "MODEL: $MODEL | CSC: $CSC"
+    echo -e "DOWNLOAD DIR: $DOWN_DIR"
+
+    # Check firmware version
+    if [ -z "$VERSION" ]; then
+        VERSION=$($samloader check-update \
+            --model "$MODEL" \
+            --region "$CSC")
+
+        if [ $? -ne 0 ] || [ -z "$VERSION" ]; then
+            echo "⛔️ MODEL/CSC not valid or no update found."
             return 1
         fi
     fi
 
+    echo "VERSION: $VERSION"
+
+    # Export version for GitHub Actions
+    if [ -n "$GITHUB_ENV" ]; then
+        echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+    fi
+
+    # Download firmware
+    local VERSION_FILE="${VERSION//\//_}"
+    local FW_FILE="$DOWN_DIR/${VERSION_FILE}.zip"
+
+    echo "Downloading Samsung firmware..."
+
+    $samloader download \
+        --model "$MODEL" \
+        --region "$CSC" \
+        --version "$VERSION" \
+        --out-file "$FW_FILE"
+
+    if [ $? -ne 0 ]; then
+        echo -e "⛔️ Download failed. Check MODEL/CSC/VERSION."
+        return 1
+    fi
+
+    # Remove encrypted ZIP files if generated
+    find "$DOWN_DIR" -type f -name "*.zip.enc*" -delete
+
+    # Find downloaded firmware ZIP
+    local ACTUAL_FW
+    ACTUAL_FW=$(find "$DOWN_DIR" -maxdepth 1 -type f -name "*.zip" | head -n 1)
+
+    if [ -z "$ACTUAL_FW" ]; then
+        echo "⛔️ Firmware ZIP was not found."
+        return 1
+    fi
+
+    local FILE_SIZE
+    FILE_SIZE=$(du -m "$ACTUAL_FW" 2>/dev/null | awk '{print $1}')
+
+    echo -e "Firmware Size: ${FILE_SIZE} MB"
+
+    # Rename to the standard name used by the build system
+    if [ "$ACTUAL_FW" != "$DOWN_DIR/BASE_FW.zip" ]; then
+        mv "$ACTUAL_FW" "$DOWN_DIR/BASE_FW.zip" || return 1
+    fi
+
+    echo "Base firmware: $DOWN_DIR/BASE_FW.zip"
+
+    # Download device-specific vendor
     echo "Downloading vendor for ${MODEL}"
 
+    local VENDOR_URL="https://github.com/H3CKED-UI/Vendors/releases/download/${MODEL}_latest/vendor.img"
+    local VENDOR_FILE="$DOWN_DIR/vendor.img"
+
     wget -q \
-        "https://github.com/H3CKED-UI/Vendors/releases/download/${MODEL}_latest/vendor.img" \
-        -O "${DOWN_DIR}/vendor.img"
+        "$VENDOR_URL" \
+        -O "$VENDOR_FILE" || {
+            echo "⛔️ Failed to download vendor for $MODEL."
+            return 1
+        }
+
+    echo "Vendor: $VENDOR_FILE"
+    echo "Firmware preparation complete."
+
+    return 0
 }
 
 EXTRACT_FIRMWARE() {
