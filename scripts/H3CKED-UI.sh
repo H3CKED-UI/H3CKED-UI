@@ -707,21 +707,6 @@ EXTRACT_FIRMWARE_IMG() {
     rm -f "$FIRM_DIR"/*.img
 }
 
-One important detail: your BUILD_PARTITIONS already contains:
-BUILD_PARTITIONS=product,vendor,odm,system_ext,system
-
-so after lpunpack, the resulting layout is exactly what your existing pipeline expects:
-FIRMWARE/
-├── system.img
-├── system_ext.img
-├── product.img
-├── odm.img
-└── vendor.img        ← A226B vendor
-
-super.img itself will subsequently be removed by PREPARE_PARTITIONS() because it isn't in BUILD_PARTITIONS.
-Also, I deliberately prevent the A156B AP's vendor.img from overwriting your A226B vendor.
-
-
 EXTRACT_FIRMWARE_IMG() {
     echo ""
 	if [ "$#" -ne 1 ]; then
