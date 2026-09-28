@@ -169,7 +169,6 @@ DOWNLOAD_FIRMWARE() {
     return 0
 }
 
-
 EXTRACT_FIRMWARE() {
     if [ "$#" -ne 1 ]; then
         echo "Usage: ${FUNCNAME[0]} <FIRMWARE_DIRECTORY>"
@@ -178,20 +177,76 @@ EXTRACT_FIRMWARE() {
 
     local FIRM_DIR="$1"
     local ZIP="$FIRM_DIR/BASE_FW.zip"
+    local AP_TAR
 
-    echo "Extracting downloaded firmware."
+    echo "Extracting downloaded Samsung firmware."
 
     if [ ! -f "$ZIP" ]; then
         echo "Error: BASE_FW.zip not found in $FIRM_DIR"
         return 1
     fi
 
+    # Extract the Samsung firmware ZIP
+    echo "Extracting firmware package..."
+
     7z x -y -bd -o"$FIRM_DIR" "$ZIP" || {
-        echo "Extraction failed"
+        echo "⛔️ Failed to extract firmware ZIP."
         return 1
     }
 
     rm -f "$ZIP"
+
+    # Find the AP package
+    AP_TAR=$(find "$FIRM_DIR" -maxdepth 1 -type f \
+        \( -name "AP_*.tar.md5" -o -name "AP_*.tar" \) \
+        | head -n 1)
+
+    if [ -z "$AP_TAR" ]; then
+        echo "⛔️ AP firmware package not found."
+        return 1
+    fi
+
+    echo "AP package:"
+    echo "$AP_TAR"
+
+    # Extract AP package
+    echo "Extracting AP package..."
+
+    7z x -y -bd -o"$FIRM_DIR/AP" "$AP_TAR" || {
+        echo "⛔️ Failed to extract AP package."
+        return 1
+    }
+
+    # Remove AP archive after extraction
+    rm -f "$AP_TAR"
+
+    echo "Decompressing partition images..."
+
+    # Decompress Samsung LZ4 images
+    find "$FIRM_DIR/AP" -type f -name "*.img.lz4" -print0 |
+    while IFS= read -r -d '' FILE; do
+        echo "  Decompressing: $(basename "$FILE")"
+
+        lz4 -d -f "$FILE" "${FILE%.lz4}" || {
+            echo "⛔️ Failed to decompress $FILE"
+            return 1
+        }
+
+        rm -f "$FILE"
+    done
+
+    # Move extracted partition images into FIRM_DIR
+    find "$FIRM_DIR/AP" -type f -name "*.img" -exec mv -f {} "$FIRM_DIR/" \;
+
+    # Remove temporary AP directory
+    rm -rf "$FIRM_DIR/AP"
+
+    echo "Firmware extraction complete."
+
+    echo "Available partition images:"
+    find "$FIRM_DIR" -maxdepth 1 -type f -name "*.img" -printf "  %f\n"
+
+    return 0
 }
 
 PREPARE_PARTITIONS() {
