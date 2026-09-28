@@ -280,11 +280,354 @@ PREPARE_PARTITIONS() {
 
         keep_this=0
         for k in "${KEEP[@]}"; do
-            [[ "$k" == "$base" ]] && keep_this=1 && break
+DOWNLOAD_FIRMWARE() {
+    echo " "
+
+    if [ "$#" -lt 3 ]; then
+        echo -e "Usage: ${FUNCNAME[0]} <MODEL> <CSC> <DOWNLOAD_DIRECTORY> [VERSION] [TARGET_DEVICE]"
+        return 1
+    fi
+
+    local MODEL="$1"
+    local CSC="$2"
+    local DOWN_DIR="$3"
+    local VERSION="${4:-}"
+    local TARGET_DEVICE="${5:-$MODEL}"
+
+    rm -rf "$DOWN_DIR"
+    mkdir -p "$DOWN_DIR" || return 1
+
+    # Allow CSC argument to be a direct download URL
+    if [ "${#CSC}" -ne 3 ]; then
+        echo "- CSC is not 3 characters"
+        echo "- Treating CSC as download URL"
+
+        if [[ "$CSC" =~ gofile\.io/d/([^/?]+) ]]; then
+            echo "GoFile link detected"
+            echo "Directory: ${BASH_REMATCH[1]}"
+
+            python3 "${QT_DIR}/GoFileDownloader/downloader.py" "$CSC" || return 1
+
+            mv "${QT_DIR}/Downloads/${BASH_REMATCH[1]}"/* "$DOWN_DIR"/ || return 1
+
+            return 0
+        else
+            WGET_DOWNLOAD "$CSC" "$DOWN_DIR"
+            return $?
+        fi
+    fi
+
+    echo -e "======================================"
+    echo -e "  Samsung FW Downloader"
+    echo -e "======================================"
+    echo -e "FIRMWARE MODEL: $MODEL"
+    echo -e "TARGET DEVICE:  $TARGET_DEVICE"
+    echo -e "CSC: $CSC"
+    echo -e "DOWNLOAD DIR: $DOWN_DIR"
+
+    # Check samloader
+    if ! command -v samloader >/dev/null 2>&1; then
+        echo "⛔️ samloader is not installed or not in PATH."
+        return 1
+    fi
+
+    # Check firmware version
+    if [ -z "$VERSION" ]; then
+        VERSION=$(samloader check-update \
+            --model "$MODEL" \
+            --region "$CSC")
+
+        if [ $? -ne 0 ] || [ -z "$VERSION" ]; then
+            echo "⛔️ MODEL/CSC not valid or no update found."
+            return 1
+        fi
+    fi
+
+    echo "VERSION: $VERSION"
+
+    # Export version for GitHub Actions
+    if [ -n "$GITHUB_ENV" ]; then
+        echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+    fi
+
+    # Download firmware
+    local VERSION_FILE="${VERSION//\//_}"
+    local FW_FILE="$DOWN_DIR/${VERSION_FILE}.zip"
+
+    echo "Downloading Samsung firmware..."
+    echo "Firmware Version: $VERSION"
+
+    samloader download \
+        --model "$MODEL" \
+        --region "$CSC" \
+        --version "$VERSION" \
+        --out-file "$FW_FILE"
+
+    if [ $? -ne 0 ] || [ ! -f "$FW_FILE" ]; then
+        echo -e "⛔️ Download failed. Check MODEL/CSC/VERSION."
+        return 1
+    fi
+
+    # Remove encrypted ZIP files if generated
+    find "$DOWN_DIR" -type f -name "*.zip.enc*" -delete
+
+    # Find downloaded firmware ZIP
+    local ACTUAL_FW
+    ACTUAL_FW=$(find "$DOWN_DIR" -maxdepth 1 -type f -name "*.zip" | head -n 1)
+
+    if [ -z "$ACTUAL_FW" ]; then
+        echo "⛔️ Firmware ZIP was not found."
+        return 1
+    fi
+
+    local FILE_SIZE
+    FILE_SIZE=$(du -m "$ACTUAL_FW" 2>/dev/null | awk '{print $1}')
+
+    echo -e "Firmware Size: ${FILE_SIZE} MB"
+
+    # Rename to the standard name used by the build system
+    if [ "$ACTUAL_FW" != "$DOWN_DIR/BASE_FW.zip" ]; then
+        mv "$ACTUAL_FW" "$DOWN_DIR/BASE_FW.zip" || return 1
+    fi
+
+    echo "Base firmware: $DOWN_DIR/BASE_FW.zip"
+
+    # Download device-specific vendor
+    echo "Downloading vendor for $TARGET_DEVICE"
+
+    local VENDOR_URL="https://github.com/H3CKED-UI/Vendors/releases/download/${TARGET_DEVICE}_latest/vendor.img"
+    local VENDOR_FILE="$DOWN_DIR/vendor.img"
+
+    echo "Vendor URL: $VENDOR_URL"
+
+    wget -q \
+        "$VENDOR_URL" \
+        -O "$VENDOR_FILE" || {
+            echo "⛔️ Failed to download vendor for $TARGET_DEVICE."
+            return 1
+        }
+
+    if [ ! -s "$VENDOR_FILE" ]; then
+        echo "⛔️ Downloaded vendor.img is empty."
+        return 1
+    fi
+
+    echo "Vendor: $VENDOR_FILE"
+    echo "Firmware download complete."
+
+    return 0
+}
+
+
+EXTRACT_FIRMWARE() {
+    if [ "$#" -ne 1 ]; then
+        echo "Usage: ${FUNCNAME[0]} <FIRMWARE_DIRECTORY>"
+        return 1
+    fi
+
+    local FIRM_DIR="$1"
+    local ZIP="$FIRM_DIR/BASE_FW.zip"
+    local AP_TAR
+    local SUPER_DIR="$FIRM_DIR/super"
+
+    echo "Extracting downloaded Samsung firmware."
+
+    if [ ! -f "$ZIP" ]; then
+        echo "⛔️ BASE_FW.zip not found in $FIRM_DIR"
+        return 1
+    fi
+
+    # ---------------------------------------------------------
+    # Extract Samsung firmware ZIP
+    # ---------------------------------------------------------
+
+    echo "Extracting firmware package..."
+
+    7z x -y -bd -o"$FIRM_DIR" "$ZIP" || {
+        echo "⛔️ Failed to extract firmware ZIP."
+        return 1
+    }
+
+    rm -f "$ZIP"
+
+    # ---------------------------------------------------------
+    # Find AP package
+    # ---------------------------------------------------------
+
+    AP_TAR=$(find "$FIRM_DIR" -maxdepth 1 -type f \
+        \( -name "AP_*.tar.md5" -o -name "AP_*.tar" \) \
+        | head -n 1)
+
+    if [ -z "$AP_TAR" ]; then
+        echo "⛔️ AP firmware package not found."
+        return 1
+    fi
+
+    echo "AP package:"
+    echo "$AP_TAR"
+
+    # ---------------------------------------------------------
+    # Extract AP package
+    # ---------------------------------------------------------
+
+    echo "Extracting AP package..."
+
+    rm -rf "$FIRM_DIR/AP"
+    mkdir -p "$FIRM_DIR/AP"
+
+    7z x -y -bd -o"$FIRM_DIR/AP" "$AP_TAR" || {
+        echo "⛔️ Failed to extract AP package."
+        return 1
+    }
+
+    rm -f "$AP_TAR"
+
+    # ---------------------------------------------------------
+    # Decompress Samsung LZ4 images
+    # ---------------------------------------------------------
+
+    echo "Decompressing partition images..."
+
+    while IFS= read -r -d '' FILE; do
+        echo "  Decompressing: $(basename "$FILE")"
+
+        lz4 -d -f "$FILE" "${FILE%.lz4}" || {
+            echo "⛔️ Failed to decompress $FILE"
+            return 1
+        }
+
+        rm -f "$FILE"
+    done < <(find "$FIRM_DIR/AP" -type f -name "*.img.lz4" -print0)
+
+    # ---------------------------------------------------------
+    # Move AP images into FIRMWARE
+    #
+    # IMPORTANT:
+    # Do NOT overwrite the target-device vendor.img.
+    # The AP contains the firmware-model vendor, while the
+    # separately downloaded vendor.img belongs to TARGET_DEVICE.
+    # ---------------------------------------------------------
+
+    while IFS= read -r -d '' IMG; do
+        local NAME
+        NAME="$(basename "$IMG")"
+
+        if [ "$NAME" = "vendor.img" ]; then
+            echo "- Skipping AP vendor.img (using $TARGET_DEVICE vendor)"
+            rm -f "$IMG"
+            continue
+        fi
+
+        echo "- Moving $NAME"
+        mv -f "$IMG" "$FIRM_DIR/" || {
+            echo "⛔️ Failed to move $NAME"
+            return 1
+        }
+    done < <(find "$FIRM_DIR/AP" -type f -name "*.img" -print0)
+
+    # ---------------------------------------------------------
+    # Extract logical partitions from super.img
+    # ---------------------------------------------------------
+
+    if [ -f "$FIRM_DIR/super.img" ]; then
+        echo ""
+        echo "======================================"
+        echo "  Extracting logical partitions"
+        echo "======================================"
+
+        if ! command -v lpunpack >/dev/null 2>&1; then
+            echo "⛔️ lpunpack is not installed or not in PATH."
+            return 1
+        fi
+
+        rm -rf "$SUPER_DIR"
+        mkdir -p "$SUPER_DIR"
+
+        echo "Unpacking super.img..."
+
+        lpunpack \
+            "$FIRM_DIR/super.img" \
+            "$SUPER_DIR" || {
+                echo "⛔️ Failed to unpack super.img."
+                return 1
+            }
+
+        # Copy only the partitions H3CKED-UI needs.
+        # Vendor is intentionally excluded because the target
+        # device vendor was downloaded separately.
+        for PARTITION in system system_ext odm product; do
+            if [ -f "$SUPER_DIR/${PARTITION}.img" ]; then
+                echo "- Copying ${PARTITION}.img"
+                cp -f \
+                    "$SUPER_DIR/${PARTITION}.img" \
+                    "$FIRM_DIR/${PARTITION}.img" || {
+                        echo "⛔️ Failed to copy ${PARTITION}.img"
+                        return 1
+                    }
+            else
+                echo "- ${PARTITION}.img not present in super.img"
+            fi
+        done
+
+        # Remove temporary super extraction directory
+        rm -rf "$SUPER_DIR"
+    else
+        echo "No super.img found."
+    fi
+
+    # Remove temporary AP directory
+    rm -rf "$FIRM_DIR/AP"
+
+    echo ""
+    echo "Firmware extraction complete."
+
+    echo "Available partition images:"
+    find "$FIRM_DIR" -maxdepth 1 -type f -name "*.img" \
+        -printf "  %f\n"
+
+    return 0
+}
+
+
+PREPARE_PARTITIONS() {
+    if [ "$#" -ne 1 ]; then
+        echo "Usage: ${FUNCNAME[0]} <EXTRACTED_FIRM_DIR>"
+        return 1
+    fi
+
+    local EXTRACTED_FIRM_DIR="$1"
+
+    if [[ -z "$EXTRACTED_FIRM_DIR" || ! -d "$EXTRACTED_FIRM_DIR" ]]; then
+        echo "Invalid directory: $EXTRACTED_FIRM_DIR"
+        return 1
+    fi
+
+    IFS=',' read -r -a KEEP <<< "$BUILD_PARTITIONS"
+
+    for i in "${!KEEP[@]}"; do
+        KEEP[$i]=$(echo "${KEEP[$i]}" | xargs)
+    done
+
+    echo ""
+    echo "Preparing partitions."
+
+    shopt -s nullglob dotglob
+
+    for item in "$EXTRACTED_FIRM_DIR"/*; do
+        base=$(basename "$item")
+
+        [[ "$base" == *.img ]] && base="${base%.img}"
+
+        keep_this=0
+
+        for k in "${KEEP[@]}"; do
+            if [[ "$k" == "$base" ]]; then
+                keep_this=1
+                break
+            fi
         done
 
         if [[ $keep_this -eq 0 ]]; then
-            # echo "- Deleting: $item"
             rm -rf -- "$item"
         else
             echo "- Keeping: $item"
@@ -293,6 +636,90 @@ PREPARE_PARTITIONS() {
 
     shopt -u nullglob dotglob
 }
+
+
+EXTRACT_FIRMWARE_IMG() {
+    echo ""
+
+    if [ "$#" -ne 1 ]; then
+        echo "Usage: ${FUNCNAME[0]} <FIRMWARE_DIRECTORY>"
+        return 1
+    fi
+
+    local FIRM_DIR="$1"
+
+    echo "Extracting images from $FIRM_DIR"
+
+    for imgfile in "$FIRM_DIR"/*.img; do
+        [ -e "$imgfile" ] || continue
+
+        if [[ "$(basename "$imgfile")" == "boot.img" ]]; then
+            continue
+        fi
+
+        local partition
+        local fstype
+        local IMG_SIZE
+
+        partition="$(basename "${imgfile%.img}")"
+        fstype=$(file -b "$imgfile" | awk '{print $1}')
+
+        case "$fstype" in
+
+            Linux)
+                IMG_SIZE=$(stat -c%s -- "$imgfile")
+
+                echo "$imgfile Detected ext4. Size: $IMG_SIZE bytes."
+                echo "Extracting $imgfile in $FIRM_DIR/$partition"
+
+                sudo python3 \
+                    "$(pwd)/bin/py_scripts/imgextractor.py" \
+                    "$imgfile" \
+                    "$FIRM_DIR" || return 1
+                ;;
+
+            EROFS)
+                IMG_SIZE=$(stat -c%s -- "$imgfile")
+
+                echo ""
+                echo "$imgfile Detected EROFS. Size: $IMG_SIZE bytes."
+                echo "Extracting $imgfile in $FIRM_DIR/$partition"
+
+                "$(pwd)/bin/erofs-utils/extract.erofs" \
+                    -i "$imgfile" \
+                    -x \
+                    -f \
+                    -o "$FIRM_DIR" \
+                    >/dev/null 2>&1 || {
+                        echo "⛔️ Failed to extract $imgfile"
+                        return 1
+                    }
+                ;;
+
+            *)
+                echo "[$imgfile] Unknown filesystem type ($fstype), skipping"
+                ;;
+
+        esac
+    done
+
+    # Remove original partition images after extraction
+    rm -f "$FIRM_DIR"/*.img
+}
+
+One important detail: your BUILD_PARTITIONS already contains:
+BUILD_PARTITIONS=product,vendor,odm,system_ext,system
+
+so after lpunpack, the resulting layout is exactly what your existing pipeline expects:
+FIRMWARE/
+├── system.img
+├── system_ext.img
+├── product.img
+├── odm.img
+└── vendor.img        ← A226B vendor
+
+super.img itself will subsequently be removed by PREPARE_PARTITIONS() because it isn't in BUILD_PARTITIONS.
+Also, I deliberately prevent the A156B AP's vendor.img from overwriting your A226B vendor.
 
 
 EXTRACT_FIRMWARE_IMG() {
