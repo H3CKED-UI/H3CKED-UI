@@ -169,7 +169,8 @@ jobs:
             "$FW_MODEL" \
             "$CSC" \
             "$FIRM_DIR" \
-            "$VERSION"
+            "$VERSION" \
+            "$STOCK_DEVICE"
 
       - name: Extract firmware
         shell: bash
