@@ -47,7 +47,7 @@ DOWNLOAD_FIRMWARE() {
     echo " "
 
     if [ "$#" -lt 3 ]; then
-        echo -e "Usage: ${FUNCNAME[0]} <MODEL> <CSC> <DOWNLOAD_DIRECTORY> [VERSION]"
+        echo -e "Usage: ${FUNCNAME[0]} <MODEL> <CSC> <DOWNLOAD_DIRECTORY> [VERSION] [TARGET_DEVICE]"
         return 1
     fi
 
@@ -55,6 +55,7 @@ DOWNLOAD_FIRMWARE() {
     local CSC="$2"
     local DOWN_DIR="$3"
     local VERSION="${4:-}"
+    local TARGET_DEVICE="${5:-$MODEL}"
 
     rm -rf "$DOWN_DIR"
     mkdir -p "$DOWN_DIR" || return 1
@@ -82,14 +83,16 @@ DOWNLOAD_FIRMWARE() {
     echo -e "======================================"
     echo -e "  Samsung FW Downloader"
     echo -e "======================================"
-    echo -e "MODEL: $MODEL | CSC: $CSC"
+    echo -e "FIRMWARE MODEL: $MODEL"
+    echo -e "TARGET DEVICE:  $TARGET_DEVICE"
+    echo -e "CSC: $CSC"
     echo -e "DOWNLOAD DIR: $DOWN_DIR"
 
     # Check firmware version
     if [ -z "$VERSION" ]; then
         VERSION=$(samloader check-update \
-    		--model "$MODEL" \
-    		--region "$CSC")
+            --model "$MODEL" \
+            --region "$CSC")
 
         if [ $? -ne 0 ] || [ -z "$VERSION" ]; then
             echo "⛔️ MODEL/CSC not valid or no update found."
@@ -111,10 +114,10 @@ DOWNLOAD_FIRMWARE() {
     echo "Downloading Samsung firmware..."
 
     samloader download \
-    	--model "$MODEL" \
-    	--region "$CSC" \
-    	--version "$VERSION" \
-    	--out-file "$FW_FILE"
+        --model "$MODEL" \
+        --region "$CSC" \
+        --version "$VERSION" \
+        --out-file "$FW_FILE"
 
     if [ $? -ne 0 ]; then
         echo -e "⛔️ Download failed. Check MODEL/CSC/VERSION."
@@ -146,15 +149,17 @@ DOWNLOAD_FIRMWARE() {
     echo "Base firmware: $DOWN_DIR/BASE_FW.zip"
 
     # Download device-specific vendor
-    echo "Downloading vendor for ${MODEL}"
+    echo "Downloading vendor for $TARGET_DEVICE"
 
-    local VENDOR_URL="https://github.com/H3CKED-UI/Vendors/releases/download/${MODEL}_latest/vendor.img"
+    local VENDOR_URL="https://github.com/H3CKED-UI/Vendors/releases/download/${TARGET_DEVICE}_latest/vendor.img"
     local VENDOR_FILE="$DOWN_DIR/vendor.img"
+
+    echo "Vendor URL: $VENDOR_URL"
 
     wget -q \
         "$VENDOR_URL" \
         -O "$VENDOR_FILE" || {
-            echo "⛔️ Failed to download vendor for $MODEL."
+            echo "⛔️ Failed to download vendor for $TARGET_DEVICE."
             return 1
         }
 
@@ -163,6 +168,7 @@ DOWNLOAD_FIRMWARE() {
 
     return 0
 }
+
 
 EXTRACT_FIRMWARE() {
     if [ "$#" -ne 1 ]; then
