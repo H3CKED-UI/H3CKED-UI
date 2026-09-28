@@ -57,8 +57,10 @@ DOWNLOAD_FIRMWARE() {
     local VERSION="${4:-}"
     local TARGET_DEVICE="${5:-$MODEL}"
 
-    rm -rf "$DOWN_DIR"
-    mkdir -p "$DOWN_DIR" || return 1
+    mkdir -p "$DOWN_DIR" || {
+        echo "⛔️ Failed to create download directory: $DOWN_DIR"
+        return 1
+    }
 
     # Allow CSC argument to be a direct download URL
     if [ "${#CSC}" -ne 3 ]; then
@@ -71,7 +73,17 @@ DOWNLOAD_FIRMWARE() {
 
             python3 "${QT_DIR}/GoFileDownloader/downloader.py" "$CSC" || return 1
 
-            mv "${QT_DIR}/Downloads/${BASH_REMATCH[1]}"/* "$DOWN_DIR"/ || return 1
+            local GOFILE_DIR="${QT_DIR}/Downloads/${BASH_REMATCH[1]}"
+
+            if [ ! -d "$GOFILE_DIR" ]; then
+                echo "⛔️ GoFile download directory not found."
+                return 1
+            fi
+
+            find "$GOFILE_DIR" -mindepth 1 -maxdepth 1 -exec mv -f {} "$DOWN_DIR/" \; || {
+                echo "⛔️ Failed to move GoFile files."
+                return 1
+            }
 
             return 0
         else
@@ -90,20 +102,29 @@ DOWNLOAD_FIRMWARE() {
 
     # Check firmware version
     if [ -z "$VERSION" ]; then
+        echo "Checking Samsung firmware version..."
+
         VERSION=$(samloader check-update \
             --model "$MODEL" \
-            --region "$CSC")
+            --region "$CSC" 2>/dev/null)
 
         if [ $? -ne 0 ] || [ -z "$VERSION" ]; then
-            echo "⛔️ MODEL/CSC not valid or no update found."
+            echo "⛔️ MODEL/CSC is invalid or no firmware update was found."
             return 1
         fi
+
+        VERSION=$(echo "$VERSION" | tail -n 1 | tr -d '\r')
     fi
 
     echo "VERSION: $VERSION"
 
+    if [ -z "$VERSION" ]; then
+        echo "⛔️ Firmware version is empty."
+        return 1
+    fi
+
     # Export version for GitHub Actions
-    if [ -n "$GITHUB_ENV" ]; then
+    if [ -n "${GITHUB_ENV:-}" ]; then
         echo "VERSION=$VERSION" >> "$GITHUB_ENV"
     fi
 
@@ -117,21 +138,25 @@ DOWNLOAD_FIRMWARE() {
         --model "$MODEL" \
         --region "$CSC" \
         --version "$VERSION" \
-        --out-file "$FW_FILE"
-
-    if [ $? -ne 0 ]; then
-        echo -e "⛔️ Download failed. Check MODEL/CSC/VERSION."
-        return 1
-    fi
+        --out-file "$FW_FILE" || {
+            echo "⛔️ Download failed. Check MODEL/CSC/VERSION."
+            return 1
+        }
 
     # Remove encrypted ZIP files if generated
     find "$DOWN_DIR" -type f -name "*.zip.enc*" -delete
 
     # Find downloaded firmware ZIP
-    local ACTUAL_FW
-    ACTUAL_FW=$(find "$DOWN_DIR" -maxdepth 1 -type f -name "*.zip" | head -n 1)
+    local ACTUAL_FW=""
 
-    if [ -z "$ACTUAL_FW" ]; then
+    if [ -f "$FW_FILE" ]; then
+        ACTUAL_FW="$FW_FILE"
+    else
+        ACTUAL_FW=$(find "$DOWN_DIR" -maxdepth 1 -type f -name "*.zip" \
+            ! -name "BASE_FW.zip" | head -n 1)
+    fi
+
+    if [ -z "$ACTUAL_FW" ] || [ ! -f "$ACTUAL_FW" ]; then
         echo "⛔️ Firmware ZIP was not found."
         return 1
     fi
@@ -139,11 +164,14 @@ DOWNLOAD_FIRMWARE() {
     local FILE_SIZE
     FILE_SIZE=$(du -m "$ACTUAL_FW" 2>/dev/null | awk '{print $1}')
 
-    echo -e "Firmware Size: ${FILE_SIZE} MB"
+    echo "Firmware Size: ${FILE_SIZE:-0} MB"
 
     # Rename to the standard name used by the build system
     if [ "$ACTUAL_FW" != "$DOWN_DIR/BASE_FW.zip" ]; then
-        mv "$ACTUAL_FW" "$DOWN_DIR/BASE_FW.zip" || return 1
+        mv -f "$ACTUAL_FW" "$DOWN_DIR/BASE_FW.zip" || {
+            echo "⛔️ Failed to rename firmware ZIP."
+            return 1
+        }
     fi
 
     echo "Base firmware: $DOWN_DIR/BASE_FW.zip"
@@ -156,18 +184,26 @@ DOWNLOAD_FIRMWARE() {
 
     echo "Vendor URL: $VENDOR_URL"
 
-    wget -q \
+    wget -q --show-progress \
         "$VENDOR_URL" \
         -O "$VENDOR_FILE" || {
             echo "⛔️ Failed to download vendor for $TARGET_DEVICE."
+            rm -f "$VENDOR_FILE"
             return 1
         }
+
+    if [ ! -s "$VENDOR_FILE" ]; then
+        echo "⛔️ Downloaded vendor.img is empty."
+        rm -f "$VENDOR_FILE"
+        return 1
+    fi
 
     echo "Vendor: $VENDOR_FILE"
     echo "Firmware preparation complete."
 
     return 0
 }
+
 
 EXTRACT_FIRMWARE() {
     if [ "$#" -ne 1 ]; then
@@ -186,7 +222,6 @@ EXTRACT_FIRMWARE() {
         return 1
     fi
 
-    # Extract the Samsung firmware ZIP
     echo "Extracting firmware package..."
 
     7z x -y -bd -o"$FIRM_DIR" "$ZIP" || {
@@ -196,7 +231,6 @@ EXTRACT_FIRMWARE() {
 
     rm -f "$ZIP"
 
-    # Find the AP package
     AP_TAR=$(find "$FIRM_DIR" -maxdepth 1 -type f \
         \( -name "AP_*.tar.md5" -o -name "AP_*.tar" \) \
         | head -n 1)
@@ -209,7 +243,6 @@ EXTRACT_FIRMWARE() {
     echo "AP package:"
     echo "$AP_TAR"
 
-    # Extract AP package
     echo "Extracting AP package..."
 
     7z x -y -bd -o"$FIRM_DIR/AP" "$AP_TAR" || {
@@ -217,12 +250,10 @@ EXTRACT_FIRMWARE() {
         return 1
     }
 
-    # Remove AP archive after extraction
     rm -f "$AP_TAR"
 
     echo "Decompressing partition images..."
 
-    # Decompress Samsung LZ4 images
     find "$FIRM_DIR/AP" -type f -name "*.img.lz4" -print0 |
     while IFS= read -r -d '' FILE; do
         echo "  Decompressing: $(basename "$FILE")"
@@ -235,10 +266,8 @@ EXTRACT_FIRMWARE() {
         rm -f "$FILE"
     done
 
-    # Move extracted partition images into FIRM_DIR
     find "$FIRM_DIR/AP" -type f -name "*.img" -exec mv -f {} "$FIRM_DIR/" \;
 
-    # Remove temporary AP directory
     rm -rf "$FIRM_DIR/AP"
 
     echo "Firmware extraction complete."
@@ -249,6 +278,7 @@ EXTRACT_FIRMWARE() {
     return 0
 }
 
+
 PREPARE_PARTITIONS() {
     if [ "$#" -ne 1 ]; then
         echo "Usage: ${FUNCNAME[0]} <EXTRACTED_FIRM_DIR>"
@@ -257,15 +287,24 @@ PREPARE_PARTITIONS() {
 
     local EXTRACTED_FIRM_DIR="$1"
 
-    [[ -z "$EXTRACTED_FIRM_DIR" || ! -d "$EXTRACTED_FIRM_DIR" ]] && {
+    if [[ -z "$EXTRACTED_FIRM_DIR" || ! -d "$EXTRACTED_FIRM_DIR" ]]; then
         echo "Invalid directory: $EXTRACTED_FIRM_DIR"
         return 1
-    }
+    fi
+
+    if [[ -z "${BUILD_PARTITIONS:-}" ]]; then
+        echo "⛔️ BUILD_PARTITIONS is not set."
+        return 1
+    fi
+
+    local -a KEEP=()
+    local item base k keep_this
 
     IFS=',' read -r -a KEEP <<< "$BUILD_PARTITIONS"
 
     for i in "${!KEEP[@]}"; do
-        KEEP[$i]=$(echo "${KEEP[$i]}" | xargs)
+        KEEP[$i]="${KEEP[$i]#"${KEEP[$i]%%[![:space:]]*}"}"
+        KEEP[$i]="${KEEP[$i]%"${KEEP[$i]##*[![:space:]]}"}"
     done
 
     echo ""
@@ -276,15 +315,20 @@ PREPARE_PARTITIONS() {
     for item in "$EXTRACTED_FIRM_DIR"/*; do
         base=$(basename "$item")
 
-        [[ "$base" == *.img ]] && base="${base%.img}"
+        if [[ "$base" == *.img ]]; then
+            base="${base%.img}"
+        fi
 
         keep_this=0
+
         for k in "${KEEP[@]}"; do
-            [[ "$k" == "$base" ]] && keep_this=1 && break
+            if [[ "$k" == "$base" ]]; then
+                keep_this=1
+                break
+            fi
         done
 
         if [[ $keep_this -eq 0 ]]; then
-            # echo "- Deleting: $item"
             rm -rf -- "$item"
         else
             echo "- Keeping: $item"
@@ -292,6 +336,8 @@ PREPARE_PARTITIONS() {
     done
 
     shopt -u nullglob dotglob
+
+    return 0
 }
 
 
