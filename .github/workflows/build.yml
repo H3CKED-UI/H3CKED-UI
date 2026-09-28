@@ -61,9 +61,16 @@ jobs:
             e2fsprogs \
             zstd \
             aria2
-
-          pip3 install liblp tgcrypto pyrogram gdown
-
+      
+          pip3 install \
+            liblp \
+            tgcrypto \
+            pyrogram \
+            gdown \
+            samloader
+      
+          samloader --help
+      
           chmod +x bin/erofs-utils/extract.erofs
           chmod +x bin/erofs-utils/mkfs.erofs
 
