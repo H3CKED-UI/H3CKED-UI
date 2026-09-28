@@ -827,41 +827,218 @@ FIX_VNDK() {
     echo "======================================"
 
     echo "Checking:"
-    echo "$TARGET_ROM_SYSTEM_EXT_DIR/apex/com.android.vndk.v${STOCK_VNDK_VERSION}.apex"
+FIX_VNDK() {
+    echo ""
+    echo "======================================"
+    echo "  VNDK / FIRMWARE DEBUG"
+    echo "======================================"
 
-    if [ -f "$TARGET_ROM_SYSTEM_EXT_DIR/apex/com.android.vndk.v${STOCK_VNDK_VERSION}.apex" ]; then
-        echo "- VNDK matched."
+    echo ""
+    echo "[DEBUG] Configuration:"
+    echo "  STOCK_DEVICE              = ${STOCK_DEVICE:-<unset>}"
+    echo "  TARGET_DEVICE             = ${TARGET_DEVICE:-<unset>}"
+    echo "  STOCK_VNDK_VERSION        = ${STOCK_VNDK_VERSION:-<unset>}"
+    echo "  VNDKS_COLLECTION          = ${VNDKS_COLLECTION:-<unset>}"
+    echo "  TARGET_ROM_SYSTEM_EXT_DIR = ${TARGET_ROM_SYSTEM_EXT_DIR:-<unset>}"
+
+    echo ""
+    echo "======================================"
+    echo "  FIRMWARE TREE"
+    echo "======================================"
+
+    if [ -d "FIRMWARE" ]; then
+        echo "[DEBUG] FIRMWARE directory:"
+        echo "  $(realpath FIRMWARE 2>/dev/null || echo "FIRMWARE")"
+
+        echo ""
+        echo "[DEBUG] All directories, folders and files:"
+        find "FIRMWARE" -print 2>/dev/null | sort
     else
-        echo "- VNDK mismatch or missing."
-
-        echo ""
-        echo "[DEBUG] Would copy:"
-        echo "$VNDKS_COLLECTION/com.android.vndk.v${STOCK_VNDK_VERSION}.apex"
-
-        echo ""
-        echo "[DEBUG] To:"
-        echo "$TARGET_ROM_SYSTEM_EXT_DIR/apex/"
-
-        # Keep original operation
-        rm -f "$TARGET_ROM_SYSTEM_EXT_DIR/apex/com.android.vndk"*.apex
-
-        cp -rfa \
-            "$VNDKS_COLLECTION/com.android.vndk.v${STOCK_VNDK_VERSION}.apex" \
-            "$TARGET_ROM_SYSTEM_EXT_DIR/apex/" || {
-                echo ""
-                echo "⛔️ VNDK COPY FAILED"
-                return 1
-            }
-
-        sed -i \
-            "/<vendor-ndk>/,/<\/vendor-ndk>/ s|<version>[0-9]\+</version>|<version>${STOCK_VNDK_VERSION}</version>|" \
-            "$TARGET_ROM_SYSTEM_EXT_DIR/etc/vintf/manifest.xml"
+        echo "⛔️ FIRMWARE directory does not exist."
+        echo "  Current directory: $(pwd)"
+        return 1
     fi
 
     echo ""
     echo "======================================"
-    echo "  END VNDK DEBUG"
+    echo "  SYSTEM_EXT SEARCH"
     echo "======================================"
+
+    echo "[DEBUG] Directories named system_ext:"
+    find "FIRMWARE" -type d -name "system_ext" \
+        -print 2>/dev/null | sort
+
+    echo ""
+    echo "[DEBUG] Everything containing system_ext:"
+    find "FIRMWARE" -path "*system_ext*" \
+        -print 2>/dev/null | sort
+
+    echo ""
+    echo "======================================"
+    echo "  APEX SEARCH"
+    echo "======================================"
+
+    echo "[DEBUG] All apex directories:"
+    find "FIRMWARE" -type d -name "apex" \
+        -print 2>/dev/null | sort
+
+    echo ""
+    echo "[DEBUG] All VNDK APEX files:"
+    find "FIRMWARE" -type f \
+        \( -name "com.android.vndk*.apex" -o -name "*vndk*.apex" \) \
+        -print 2>/dev/null | sort
+
+    echo ""
+    echo "======================================"
+    echo "  TARGET PATH"
+    echo "======================================"
+
+    echo "[DEBUG] TARGET_ROM_SYSTEM_EXT_DIR:"
+    printf '  <%s>\n' "$TARGET_ROM_SYSTEM_EXT_DIR"
+
+    echo ""
+    echo "[DEBUG] Expected APEX directory:"
+    printf '  <%s>\n' "$TARGET_ROM_SYSTEM_EXT_DIR/apex"
+
+    echo ""
+    echo "[DEBUG] Target system_ext exists?"
+
+    if [ -d "$TARGET_ROM_SYSTEM_EXT_DIR" ]; then
+        echo "  ✓ YES"
+        echo "  Path: $TARGET_ROM_SYSTEM_EXT_DIR"
+    else
+        echo "  ⛔ NO"
+    fi
+
+    echo ""
+    echo "[DEBUG] Target apex exists?"
+
+    if [ -d "$TARGET_ROM_SYSTEM_EXT_DIR/apex" ]; then
+        echo "  ✓ YES"
+        echo "  Path: $TARGET_ROM_SYSTEM_EXT_DIR/apex"
+        echo ""
+        echo "  Contents:"
+        find "$TARGET_ROM_SYSTEM_EXT_DIR/apex" -maxdepth 1 \
+            -print 2>/dev/null | sort
+    else
+        echo "  ⛔ NO"
+    fi
+
+    echo ""
+    echo "======================================"
+    echo "  VNDK COLLECTION"
+    echo "======================================"
+
+    if [ -d "$VNDKS_COLLECTION" ]; then
+        echo "[DEBUG] VNDK collection contents:"
+        find "$VNDKS_COLLECTION" -maxdepth 2 \
+            -print 2>/dev/null | sort
+    else
+        echo "⛔️ VNDK collection does not exist:"
+        echo "  $VNDKS_COLLECTION"
+        return 1
+    fi
+
+    local VNDK_APEX="com.android.vndk.v${STOCK_VNDK_VERSION}.apex"
+    local VNDK_SOURCE="$VNDKS_COLLECTION/$VNDK_APEX"
+    local APEX_DIR="$TARGET_ROM_SYSTEM_EXT_DIR/apex"
+    local VNDK_DEST="$APEX_DIR/$VNDK_APEX"
+
+    echo ""
+    echo "======================================"
+    echo "  VNDK RESOLUTION"
+    echo "======================================"
+
+    echo "[DEBUG] VNDK APEX:"
+    echo "  $VNDK_APEX"
+
+    echo "[DEBUG] Source:"
+    echo "  $VNDK_SOURCE"
+
+    echo "[DEBUG] Destination directory:"
+    echo "  $APEX_DIR"
+
+    echo "[DEBUG] Destination:"
+    echo "  $VNDK_DEST"
+
+    echo ""
+    echo "======================================"
+    echo "  VNDK CHECK"
+    echo "======================================"
+
+    echo "- Checking $STOCK_DEVICE and $TARGET_DEVICE vndk version."
+
+    if [ -f "$VNDK_DEST" ]; then
+        echo "- VNDK matched."
+        echo "- Existing VNDK: $VNDK_DEST"
+    else
+        echo "- VNDK mismatch or missing."
+
+        echo ""
+        echo "[DEBUG] Removing existing VNDK APEX files:"
+        echo "  $APEX_DIR/com.android.vndk*.apex"
+
+        rm -f "$APEX_DIR/com.android.vndk"*.apex
+
+        echo ""
+        echo "[DEBUG] Copy operation:"
+        echo "  FROM:"
+        echo "    $VNDK_SOURCE"
+        echo "  TO:"
+        echo "    $APEX_DIR/"
+
+        if [ ! -f "$VNDK_SOURCE" ]; then
+            echo ""
+            echo "⛔️ VNDK source file does not exist:"
+            echo "  $VNDK_SOURCE"
+            return 1
+        fi
+
+        if [ ! -d "$APEX_DIR" ]; then
+            echo ""
+            echo "⛔️ Destination directory does not exist:"
+            echo "  $APEX_DIR"
+            return 1
+        fi
+
+        cp -vfa "$VNDK_SOURCE" "$APEX_DIR/" || {
+            echo ""
+            echo "⛔️ VNDK copy failed."
+            echo "Source:      $VNDK_SOURCE"
+            echo "Destination: $APEX_DIR/"
+            return 1
+        }
+
+        echo ""
+        echo "✓ VNDK copied successfully."
+
+        local MANIFEST="$TARGET_ROM_SYSTEM_EXT_DIR/etc/vintf/manifest.xml"
+
+        echo ""
+        echo "[DEBUG] Manifest:"
+        echo "  $MANIFEST"
+
+        if [ ! -f "$MANIFEST" ]; then
+            echo "⛔️ manifest.xml does not exist."
+            return 1
+        fi
+
+        sed -i \
+            "/<vendor-ndk>/,/<\/vendor-ndk>/ s|<version>[0-9]\+</version>|<version>${STOCK_VNDK_VERSION}</version>|" \
+            "$MANIFEST" || {
+                echo "⛔️ Failed to update VNDK version in manifest.xml."
+                return 1
+            }
+
+        echo "✓ manifest.xml updated."
+    fi
+
+    echo ""
+    echo "======================================"
+    echo "  VNDK DEBUG COMPLETE"
+    echo "======================================"
+
+    return 0
 }
 
 FIX_SYSTEM_EXT() {
