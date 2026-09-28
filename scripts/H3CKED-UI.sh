@@ -87,9 +87,9 @@ DOWNLOAD_FIRMWARE() {
 
     # Check firmware version
     if [ -z "$VERSION" ]; then
-        VERSION=$($samloader check-update \
-            --model "$MODEL" \
-            --region "$CSC")
+        VERSION=$(samloader check-update \
+    		--model "$MODEL" \
+    		--region "$CSC")
 
         if [ $? -ne 0 ] || [ -z "$VERSION" ]; then
             echo "⛔️ MODEL/CSC not valid or no update found."
@@ -110,11 +110,11 @@ DOWNLOAD_FIRMWARE() {
 
     echo "Downloading Samsung firmware..."
 
-    $samloader download \
-        --model "$MODEL" \
-        --region "$CSC" \
-        --version "$VERSION" \
-        --out-file "$FW_FILE"
+    samloader download \
+    	--model "$MODEL" \
+    	--region "$CSC" \
+    	--version "$VERSION" \
+    	--out-file "$FW_FILE"
 
     if [ $? -ne 0 ]; then
         echo -e "⛔️ Download failed. Check MODEL/CSC/VERSION."
