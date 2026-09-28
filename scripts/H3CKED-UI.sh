@@ -1037,8 +1037,6 @@ FIX_VNDK() {
     echo "======================================"
     echo "  VNDK DEBUG COMPLETE"
     echo "======================================"
-
-    return 0
 }
 
 FIX_SYSTEM_EXT() {
