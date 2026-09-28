@@ -46,8 +46,13 @@ jobs:
         uses: rokibhasansagar/slimhub_actions@v25.42.5
 
       - name: Install required packages
+        shell: bash
         run: |
-          sudo apt install -y \
+          set -e
+      
+          sudo apt-get update
+      
+          sudo apt-get install -y \
             p7zip-full \
             lz4 \
             android-sdk-libsparse-utils \
@@ -60,16 +65,45 @@ jobs:
             brotli \
             e2fsprogs \
             zstd \
-            aria2
+            aria2 \
+            curl \
+            jq
       
           pip3 install \
             liblp \
             tgcrypto \
             pyrogram \
-            gdown \
-            samloader
+            gdown
       
-          samloader --help
+          echo "Downloading latest samloader..."
+      
+          SAMLOADER_URL=$(curl -fsSL \
+            https://api.github.com/repos/topjohnwu/samloader-rs/releases/latest \
+            | jq -r '.assets[] | select(.name | test("linux-x86_64\\.zip$")) | .browser_download_url' \
+            | head -n 1)
+      
+          if [ -z "$SAMLOADER_URL" ] || [ "$SAMLOADER_URL" = "null" ]; then
+            echo "⛔️ Could not find the latest Linux x86_64 samloader release."
+            exit 1
+          fi
+      
+          echo "Downloading:"
+          echo "$SAMLOADER_URL"
+      
+          curl -fL \
+            "$SAMLOADER_URL" \
+            -o /tmp/samloader.zip
+      
+          unzip -o \
+            /tmp/samloader.zip \
+            -d /tmp/samloader
+      
+          sudo install -m 755 \
+            /tmp/samloader/samloader \
+            /usr/local/bin/samloader
+      
+          echo "samloader installed:"
+          samloader --version
       
           chmod +x bin/erofs-utils/extract.erofs
           chmod +x bin/erofs-utils/mkfs.erofs
